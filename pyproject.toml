@@ -1,0 +1,23 @@
+[project]
+name = "ai-vtt-agents-team"
+version = "0.1.0"
+description = "基于 agentscope 框架的多 Agent 视频转录翻译系统"
+readme = "design_spec.md"
+requires-python = ">=3.13"
+dependencies = [
+    "agentscope>=1.0.0",
+    "dashscope>=1.20.0",
+    "openai-whisper>=20231117",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+]
+
+[project.scripts]
+vtt = "src.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

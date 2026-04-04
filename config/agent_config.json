@@ -1,0 +1,30 @@
+{
+  "model_configs": [
+    {
+      "config_name": "dashscope_qwen",
+      "model_type": "dashscope_chat",
+      "model_name": "qwen-max",
+      "api_key": "${DASHSCOPE_API_KEY}"
+    }
+  ],
+  "agent_configs": {
+    "transcriber": {
+      "model_config_name": "dashscope_qwen",
+      "whisper_model_size": "medium"
+    },
+    "keyframe_extractor": {
+      "model_config_name": "dashscope_qwen",
+      "scene_threshold": 0.08,
+      "min_interval_sec": 5
+    },
+    "summarizer": {
+      "model_config_name": "dashscope_qwen"
+    },
+    "translator": {
+      "model_config_name": "dashscope_qwen"
+    },
+    "proofreader": {
+      "model_config_name": "dashscope_qwen"
+    }
+  }
+}
