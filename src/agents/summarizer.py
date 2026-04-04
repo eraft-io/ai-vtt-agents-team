@@ -6,9 +6,11 @@
 import os
 
 from agentscope.agent import ReActAgent
-from agentscope.formatter import DashScopeChatFormatter
+from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
-from agentscope.model import DashScopeChatModel
+from agentscope.model import OpenAIChatModel
+
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 SUMMARIZER_SYS_PROMPT = (
     "你是一个专业的内容总结编辑。你的任务是将视频字幕内容整理成一篇结构清晰的文章。\n\n"
@@ -27,7 +29,7 @@ SUMMARIZER_SYS_PROMPT = (
 
 
 def create_summarizer_agent(
-    model_name: str = "qwen-max",
+    model_name: str = "qwen3.6-plus",
     api_key: str | None = None,
 ) -> ReActAgent:
     """创建总结字幕 Agent。
@@ -45,12 +47,13 @@ def create_summarizer_agent(
     agent = ReActAgent(
         name="summarizer",
         sys_prompt=SUMMARIZER_SYS_PROMPT,
-        model=DashScopeChatModel(
+        model=OpenAIChatModel(
             model_name=model_name,
             api_key=api_key,
+            client_kwargs={"base_url": DASHSCOPE_BASE_URL},
         ),
         memory=InMemoryMemory(),
-        formatter=DashScopeChatFormatter(),
+        formatter=OpenAIChatFormatter(),
     )
 
     return agent

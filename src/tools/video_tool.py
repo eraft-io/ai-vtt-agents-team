@@ -20,12 +20,64 @@ logger = logging.getLogger(__name__)
 _DEDUP_SIZE = (128, 128)
 # 像素级 MSE 阈值，低于此值视为相同帧（0-255 灰度范围）
 _DEDUP_MSE_THRESHOLD = 50.0
+# 场景切换后等待帧稳定的最大秒数
+_SETTLE_MAX_SEC = 5.0
+# 稳定性检测步长（秒）
+_SETTLE_STEP_SEC = 0.2
+# 连续帧差异低于此值视为已稳定（无过渡动画）
+_STABLE_DIFF_THRESHOLD = 0.01
 
 
 def _frame_to_thumb(frame: np.ndarray) -> np.ndarray:
     """将帧缩放为统一尺寸的灰度缩略图，用于去重比较。"""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return cv2.resize(gray, _DEDUP_SIZE, interpolation=cv2.INTER_AREA)
+
+
+def _wait_for_stable_frame(
+    cap: cv2.VideoCapture,
+    start_time: float,
+    fps: float,
+    total_frames: int,
+) -> tuple[np.ndarray | None, float]:
+    """从 start_time 开始向后读取帧，直到连续帧之间差异趋近于零（过渡动画结束）。
+
+    原理：幻灯片过渡动画期间，相邻帧差异持续 > 0；
+    动画结束后停留在新幻灯片，相邻帧差异 ≈ 0。
+
+    Returns:
+        (stable_frame, actual_time) 或 (None, start_time) 如果搜索失败。
+    """
+    prev_frame = None
+    t = start_time
+    end_time = start_time + _SETTLE_MAX_SEC
+
+    while t <= end_time:
+        idx = int(t * fps)
+        if idx >= total_frames:
+            break
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if prev_frame is not None:
+            diff = _compute_frame_diff(prev_frame, frame)
+            if diff < _STABLE_DIFF_THRESHOLD:
+                # 连续帧几乎相同，说明过渡动画已结束
+                logger.debug(
+                    "帧稳定: t=%.2fs, diff=%.4f (< %.4f)",
+                    t, diff, _STABLE_DIFF_THRESHOLD,
+                )
+                return frame, t
+
+        prev_frame = frame.copy()
+        t += _SETTLE_STEP_SEC
+
+    # 搜索超时，返回最后一帧
+    if prev_frame is not None:
+        return prev_frame, min(t, end_time)
+    return None, start_time
 
 
 def _is_duplicate_frame(
@@ -105,28 +157,47 @@ def _extract_keyframes_by_scene(
                 diff > scene_threshold
                 and (current_time - last_keyframe_time) >= min_interval_sec
             ):
-                # 检测到场景切换，用像素 MSE 检查是否与已保存帧重复
-                thumb = _frame_to_thumb(frame)
+                # 检测到场景切换，等待过渡动画结束后再截取
+                clean_frame, clean_time = _wait_for_stable_frame(
+                    cap, current_time, fps, total_frames,
+                )
+                if clean_frame is None:
+                    clean_frame = frame
+                    clean_time = current_time
+
+                # 用像素 MSE 检查是否与已保存帧重复
+                thumb = _frame_to_thumb(clean_frame)
                 if _is_duplicate_frame(thumb, saved_thumbs):
-                    logger.debug("跳过重复帧(MSE): time=%.2fs", current_time)
+                    logger.debug("跳过重复帧(MSE): time=%.2fs", clean_time)
                 else:
-                    timestamp_ms = int(current_time * 1000)
+                    timestamp_ms = int(clean_time * 1000)
                     image_filename = f"frame_{timestamp_ms:08d}.jpg"
                     image_path = os.path.join(output_dir, image_filename)
 
-                    cv2.imwrite(image_path, frame)
+                    cv2.imwrite(image_path, clean_frame)
                     saved_thumbs.append(thumb)
 
                     keyframes.append({
-                        "timestamp": round(current_time, 2),
+                        "timestamp": round(clean_time, 2),
                         "image_path": image_path,
                     })
 
-                    last_keyframe_time = current_time
+                    last_keyframe_time = clean_time
                     logger.debug(
                         "关键帧: time=%.2fs, diff=%.4f, path=%s",
-                        current_time, diff, image_path,
+                        clean_time, diff, image_path,
                     )
+
+                # 更新读取位置到搜索结束处，避免重复处理
+                settle_end_idx = int((clean_time + _SETTLE_STEP_SEC) * fps)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, settle_end_idx)
+                frame_idx = settle_end_idx
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                prev_frame = frame.copy()
+                frame_idx += 1
+                continue
         else:
             # 保存第一帧作为关键帧
             thumb = _frame_to_thumb(frame)
@@ -186,6 +257,25 @@ def _extract_keyframes_by_interval(
         ret, frame = cap.read()
         if not ret:
             break
+
+        # 检查当前帧是否处于过渡动画中：与下一帧比较，如果差异大则等待稳定
+        next_idx = int((current_time + 0.2) * fps)
+        if next_idx < total_frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, next_idx)
+            ret2, next_frame = cap.read()
+            if ret2:
+                diff_next = _compute_frame_diff(frame, next_frame)
+                if diff_next > _STABLE_DIFF_THRESHOLD:
+                    # 当前帧与下一帧有差异，可能在过渡中，等待稳定
+                    stable_frame, stable_time = _wait_for_stable_frame(
+                        cap, current_time, fps, total_frames,
+                    )
+                    if stable_frame is not None:
+                        frame = stable_frame
+                        logger.debug(
+                            "过渡帧修正: %.2fs -> %.2fs",
+                            current_time, stable_time,
+                        )
 
         # 用像素 MSE 与所有已保存帧比较，重复则跳过
         thumb = _frame_to_thumb(frame)

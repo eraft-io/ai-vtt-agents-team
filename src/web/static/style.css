@@ -1,0 +1,343 @@
+/* ======================================================
+   AI VTT Agents Team – Web UI Styles
+   ====================================================== */
+
+:root {
+  --bg: #f5f6fa;
+  --panel-bg: #ffffff;
+  --sidebar-bg: #1e1e2e;
+  --sidebar-fg: #cdd6f4;
+  --sidebar-heading: #89b4fa;
+  --accent: #89b4fa;
+  --accent-hover: #74c7ec;
+  --danger: #f38ba8;
+  --success: #a6e3a1;
+  --warning: #f9e2af;
+  --muted: #6c7086;
+  --border: #e0e0e0;
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+  --mono: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font);
+  font-size: 14px;
+  background: var(--bg);
+  color: #333;
+}
+
+/* ===================== Layout ===================== */
+.app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ===================== Sidebar ===================== */
+.config-panel {
+  width: 340px;
+  min-width: 340px;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+
+.logo {
+  font-size: 22px;
+  font-weight: 700;
+  padding: 20px 20px 4px;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+.subtitle {
+  padding: 0 20px 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.config-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+}
+
+.config-section {
+  margin-bottom: 20px;
+}
+
+.config-section h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sidebar-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.config-section label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.config-section input,
+.config-section select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  color: var(--sidebar-fg);
+  font-size: 13px;
+  font-family: var(--mono);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.config-section input:focus,
+.config-section select:focus {
+  border-color: var(--accent);
+}
+
+.config-section select option {
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+}
+
+.config-status {
+  font-size: 12px;
+  margin-top: 8px;
+  min-height: 18px;
+}
+
+.config-status.ok { color: var(--success); }
+.config-status.err { color: var(--danger); }
+
+/* ===================== Buttons ===================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--accent);
+  color: var(--sidebar-bg);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-accent {
+  background: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.btn-accent:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-sm {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: var(--border);
+  color: #555;
+  border-radius: 4px;
+}
+
+.btn-sm:hover { background: #d0d0d0; }
+
+/* ===================== Chat Panel ===================== */
+.chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-input-bar {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.input-prompt {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.input-prompt:focus {
+  border-color: var(--accent);
+}
+
+/* ===================== Messages ===================== */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.msg {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 100%;
+  word-break: break-word;
+  font-family: var(--mono);
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-log {
+  background: #f0f1f5;
+  color: #555;
+  font-size: 12px;
+}
+
+.msg-stage {
+  background: #e8f0fe;
+  color: #1a5fb4;
+  font-weight: 600;
+}
+
+.msg-error {
+  background: #fce4e4;
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.msg-result {
+  background: #e8f8e8;
+  color: #1e7e34;
+  font-weight: 600;
+}
+
+.msg-info {
+  background: #fff8e1;
+  color: #795548;
+}
+
+/* ===================== Result Area ===================== */
+.result-area {
+  border-top: 2px solid var(--accent);
+  background: var(--panel-bg);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.result-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #333;
+}
+
+.result-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.result-content {
+  padding: 16px 20px;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.result-content h1,
+.result-content h2,
+.result-content h3 {
+  margin: 16px 0 8px;
+  color: #222;
+}
+
+.result-content p {
+  margin-bottom: 10px;
+}
+
+.result-content img {
+  max-width: 100%;
+  border-radius: var(--radius);
+  margin: 8px 0;
+}
+
+.result-content code {
+  background: #f0f1f5;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.result-content pre {
+  background: #f0f1f5;
+  padding: 12px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+/* ===================== Scrollbar ===================== */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #bbb; border-radius: 3px; }
+.config-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); }
+
+/* ===================== Responsive ===================== */
+@media (max-width: 768px) {
+  .app { flex-direction: column; }
+  .config-panel {
+    width: 100%;
+    min-width: unset;
+    max-height: 40vh;
+  }
+}

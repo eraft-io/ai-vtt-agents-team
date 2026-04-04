@@ -15,7 +15,7 @@ import os
 import re
 import sys
 
-from agentscope.model import DashScopeChatModel
+from agentscope.model import OpenAIChatModel
 
 from src.pipelines.vtt_pipeline import VTTPipeline
 
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 async def parse_user_prompt(
     prompt: str,
     api_key: str,
-    model_name: str = "qwen-max",
+    model_name: str = "qwen3.6-plus",
 ) -> dict:
     """使用 LLM 解析用户提示词，提取视频路径和目标语言。
 
@@ -43,10 +43,11 @@ async def parse_user_prompt(
     Returns:
         包含 video_path 和 target_language 的字典。
     """
-    model = DashScopeChatModel(
+    model = OpenAIChatModel(
         model_name=model_name,
         api_key=api_key,
         stream=False,
+        client_kwargs={"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
     )
 
     parse_prompt = (
@@ -138,9 +139,9 @@ async def main_async(
     model_configs = config.get("model_configs", [])
     agent_configs = config.get("agent_configs", {})
 
-    model_name = "qwen-max"
+    model_name = "qwen3.6-plus"
     if model_configs:
-        model_name = model_configs[0].get("model_name", "qwen-max")
+        model_name = model_configs[0].get("model_name", "qwen3.6-plus")
 
     whisper_model_size = agent_configs.get(
         "transcriber", {},
@@ -179,13 +180,13 @@ async def main_async(
         min_interval_sec=min_interval_sec,
     )
 
-    result = await pipeline.run(
+    result, output_path = await pipeline.run(
         video_path=video_path,
         target_language=target_language,
     )
 
     print("\n" + "=" * 60)
-    print("最终文章:")
+    print(f"最终文章 (已保存至 {output_path}):")
     print("=" * 60)
     print(result)
 

@@ -6,9 +6,11 @@
 import os
 
 from agentscope.agent import ReActAgent
-from agentscope.formatter import DashScopeChatFormatter
+from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
-from agentscope.model import DashScopeChatModel
+from agentscope.model import OpenAIChatModel
+
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 PROOFREADER_SYS_PROMPT = (
     "你是一个严谨的文章校对专家。你的任务是对翻译后的文章进行逐行校对。\n\n"
@@ -24,7 +26,7 @@ PROOFREADER_SYS_PROMPT = (
 
 
 def create_proofreader_agent(
-    model_name: str = "qwen-max",
+    model_name: str = "qwen3.6-plus",
     api_key: str | None = None,
 ) -> ReActAgent:
     """创建校对文章 Agent。
@@ -42,12 +44,13 @@ def create_proofreader_agent(
     agent = ReActAgent(
         name="proofreader",
         sys_prompt=PROOFREADER_SYS_PROMPT,
-        model=DashScopeChatModel(
+        model=OpenAIChatModel(
             model_name=model_name,
             api_key=api_key,
+            client_kwargs={"base_url": DASHSCOPE_BASE_URL},
         ),
         memory=InMemoryMemory(),
-        formatter=DashScopeChatFormatter(),
+        formatter=OpenAIChatFormatter(),
     )
 
     return agent

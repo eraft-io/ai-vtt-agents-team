@@ -2,15 +2,16 @@
   "model_configs": [
     {
       "config_name": "dashscope_qwen",
-      "model_type": "dashscope_chat",
-      "model_name": "qwen-max",
-      "api_key": "${DASHSCOPE_API_KEY}"
+      "model_type": "openai_chat",
+      "model_name": "qwen3.6-plus",
+      "api_key": "sk-xxx",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
     }
   ],
   "agent_configs": {
     "transcriber": {
       "model_config_name": "dashscope_qwen",
-      "whisper_model_size": "medium"
+      "whisper_model_size": "tiny"
     },
     "keyframe_extractor": {
       "model_config_name": "dashscope_qwen",

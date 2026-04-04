@@ -6,12 +6,14 @@
 import os
 
 from agentscope.agent import ReActAgent
-from agentscope.formatter import DashScopeChatFormatter
+from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
-from agentscope.model import DashScopeChatModel
+from agentscope.model import OpenAIChatModel
 from agentscope.tool import Toolkit
 
 from src.tools.video_tool import extract_keyframes
+
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 KEYFRAME_SYS_PROMPT = (
     "你是一个视频关键帧提取专家。你的任务是接收视频文件路径，调用 extract_keyframes 工具"
@@ -25,7 +27,7 @@ KEYFRAME_SYS_PROMPT = (
 
 
 def create_keyframe_agent(
-    model_name: str = "qwen-max",
+    model_name: str = "qwen3.6-plus",
     api_key: str | None = None,
     scene_threshold: float = 0.3,
     min_interval_sec: float = 5.0,
@@ -50,12 +52,13 @@ def create_keyframe_agent(
     agent = ReActAgent(
         name="keyframe_extractor",
         sys_prompt=KEYFRAME_SYS_PROMPT,
-        model=DashScopeChatModel(
+        model=OpenAIChatModel(
             model_name=model_name,
             api_key=api_key,
+            client_kwargs={"base_url": DASHSCOPE_BASE_URL},
         ),
         memory=InMemoryMemory(),
-        formatter=DashScopeChatFormatter(),
+        formatter=OpenAIChatFormatter(),
         toolkit=toolkit,
     )
 

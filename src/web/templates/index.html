@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI VTT Agents Team</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <!-- ============== Left: Config Panel ============== -->
+    <aside class="config-panel">
+      <h1 class="logo">AI VTT</h1>
+      <p class="subtitle">多 Agent 视频转录翻译系统</p>
+
+      <div class="config-scroll">
+        <!-- Model Config -->
+        <section class="config-section">
+          <h2>模型配置</h2>
+          <label>API Key
+            <input type="password" id="cfg-api-key" placeholder="sk-xxxxxxxx">
+          </label>
+          <label>模型名称
+            <input type="text" id="cfg-model-name" placeholder="qwen3.6-plus">
+          </label>
+          <label>Base URL
+            <input type="text" id="cfg-base-url" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+          </label>
+        </section>
+
+        <!-- Transcriber -->
+        <section class="config-section">
+          <h2>转录 Agent</h2>
+          <label>Whisper 模型
+            <select id="cfg-whisper-model">
+              <option value="tiny">tiny (最快)</option>
+              <option value="base">base</option>
+              <option value="small" selected>small</option>
+              <option value="medium">medium (推荐)</option>
+              <option value="large">large (最精确)</option>
+            </select>
+          </label>
+        </section>
+
+        <!-- Keyframe Extractor -->
+        <section class="config-section">
+          <h2>关键帧提取</h2>
+          <label>场景阈值
+            <input type="number" id="cfg-scene-threshold" step="0.01" min="0" max="1" value="0.08">
+          </label>
+          <label>最小间隔 (秒)
+            <input type="number" id="cfg-min-interval" step="1" min="1" value="5">
+          </label>
+        </section>
+
+        <!-- Video Preprocessing -->
+        <section class="config-section">
+          <h2>视频分段</h2>
+          <label>分段触发阈值 (分钟)
+            <input type="number" id="cfg-max-duration" step="1" min="1" value="30">
+          </label>
+          <label>每段时长 (分钟)
+            <input type="number" id="cfg-segment-duration" step="1" min="1" value="10">
+          </label>
+        </section>
+
+        <button id="btn-save-config" class="btn btn-primary">保存配置</button>
+        <div id="config-status" class="config-status"></div>
+      </div>
+    </aside>
+
+    <!-- ============== Right: Chat Panel ============== -->
+    <main class="chat-panel">
+      <!-- Input bar -->
+      <div class="chat-input-bar">
+        <input type="text" id="input-prompt" class="input-prompt" placeholder="输入指令，如：帮我把 ~/Desktop/demo.mp4 翻译成中文文章">
+        <button id="btn-start" class="btn btn-accent">发送</button>
+      </div>
+
+      <!-- Message stream -->
+      <div id="chat-messages" class="chat-messages"></div>
+
+      <!-- Result area -->
+      <div id="result-area" class="result-area" style="display:none;">
+        <div class="result-header">
+          <h3>最终文章</h3>
+          <div class="result-actions">
+            <button id="btn-download-result" class="btn btn-sm">下载 .md</button>
+            <button id="btn-copy-result" class="btn btn-sm">复制</button>
+          </div>
+        </div>
+        <div id="result-content" class="result-content"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/main.js"></script>
+</body>
+</html>

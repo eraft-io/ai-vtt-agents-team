@@ -29,6 +29,8 @@ Thumbs.db
 output/audio/
 output/keyframes/
 output/articles/
+output/segments/
+output/_tmp_keyframes*/
 
 # Whisper 模型缓存
 *.pt

@@ -6,9 +6,11 @@
 import os
 
 from agentscope.agent import ReActAgent
-from agentscope.formatter import DashScopeChatFormatter
+from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
-from agentscope.model import DashScopeChatModel
+from agentscope.model import OpenAIChatModel
+
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 TRANSLATOR_SYS_PROMPT = (
     "你是一个专业翻译。你的任务是将给定的 Markdown 文章翻译为目标语言。\n\n"
@@ -27,7 +29,7 @@ TRANSLATOR_SYS_PROMPT = (
 
 
 def create_translator_agent(
-    model_name: str = "qwen-max",
+    model_name: str = "qwen3.6-plus",
     api_key: str | None = None,
 ) -> ReActAgent:
     """创建翻译字幕 Agent。
@@ -45,12 +47,13 @@ def create_translator_agent(
     agent = ReActAgent(
         name="translator",
         sys_prompt=TRANSLATOR_SYS_PROMPT,
-        model=DashScopeChatModel(
+        model=OpenAIChatModel(
             model_name=model_name,
             api_key=api_key,
+            client_kwargs={"base_url": DASHSCOPE_BASE_URL},
         ),
         memory=InMemoryMemory(),
-        formatter=DashScopeChatFormatter(),
+        formatter=OpenAIChatFormatter(),
     )
 
     return agent
