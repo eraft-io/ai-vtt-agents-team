@@ -31,10 +31,35 @@ from src.tools.video_splitter import preprocess_video
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint state helpers
+# ---------------------------------------------------------------------------
+_STATE_FILE = "pipeline_state.json"
+
+
+def _load_state(project_dir: str) -> dict | None:
+    """加载 pipeline_state.json，不存在则返回 None。"""
+    path = os.path.join(project_dir, _STATE_FILE)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_state(project_dir: str, state: dict) -> None:
+    """持久化 pipeline state 到 project_dir/pipeline_state.json。"""
+    os.makedirs(project_dir, exist_ok=True)
+    path = os.path.join(project_dir, _STATE_FILE)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
 class VTTPipeline:
     """视频转录翻译 Pipeline。
 
     编排多个 Agent 完成视频 -> 字幕 -> 总结 -> 翻译 -> 校对的完整流程。
+    支持断点续传：每完成一个分段即保存状态，失败后重启可跳过已完成分段。
     """
 
     def __init__(
@@ -119,17 +144,13 @@ class VTTPipeline:
             max_duration_sec=self.max_duration_sec,
             segment_duration_sec=self.segment_duration_sec,
         )
-        logger.info(
-            "[预处理] 完成: 共 %d 个片段",
-            len(segments),
-        )
+        logger.info("[预处理] 完成: 共 %d 个片段", len(segments))
 
         # ============================================================
         # 第一个片段的转录结果用于提取主题名
         # ============================================================
         first_segment_path = segments[0]["path"]
 
-        # 先对第一段做转录以获取主题
         logger.info("[主题提取] 转录第一个片段以提取主题名")
         first_resp = await transcribe_video(
             video_path=first_segment_path,
@@ -148,14 +169,61 @@ class VTTPipeline:
         os.makedirs(keyframes_dir, exist_ok=True)
 
         # ============================================================
+        # 断点续传：加载或初始化状态
+        # ============================================================
+        state = _load_state(project_dir)
+        total = len(segments)
+
+        if state and state.get("video_path") == video_path:
+            seg_statuses = state.get("segments", {})
+            completed_count = sum(
+                1 for s in seg_statuses.values() if s == "completed"
+            )
+            if completed_count > 0:
+                logger.info(
+                    "[断点续传] 发现已有进度: %d/%d 个片段已完成，从第 %d 个片段继续",
+                    completed_count, total, completed_count + 1,
+                )
+        else:
+            # 初始化新状态
+            seg_statuses = {}
+            state = {
+                "video_path": video_path,
+                "target_language": target_language,
+                "topic_slug": topic_slug,
+                "total_segments": total,
+                "segments": seg_statuses,
+            }
+            _save_state(project_dir, state)
+
+        # ============================================================
         # 逐段处理：转录 + 关键帧 + 总结 + 翻译 + 校对
         # ============================================================
-        all_segment_articles = []
+        all_segment_articles: list[str | None] = [None] * total
 
         for seg in segments:
             seg_idx = seg["index"]
             seg_path = seg["path"]
-            total = len(segments)
+            seg_key = str(seg_idx)
+
+            # ---- 跳过已完成的片段，从 md 文件加载 ----
+            if seg_statuses.get(seg_key) == "completed":
+                seg_md_path = os.path.join(
+                    project_dir, f"part{seg_idx:03d}_{target_language}.md",
+                )
+                if os.path.isfile(seg_md_path):
+                    with open(seg_md_path, "r", encoding="utf-8") as f:
+                        all_segment_articles[seg_idx] = f.read()
+                    logger.info(
+                        "[断点续传] 片段 %d/%d 已完成，加载缓存: %s",
+                        seg_idx + 1, total, seg_md_path,
+                    )
+                    continue
+                else:
+                    logger.warning(
+                        "[断点续传] 片段 %d/%d 标记为完成但 md 文件不存在，重新处理",
+                        seg_idx + 1, total,
+                    )
 
             logger.info("=" * 60)
             logger.info(
@@ -165,27 +233,52 @@ class VTTPipeline:
             )
             logger.info("=" * 60)
 
-            seg_article = await self._process_segment(
-                seg_path=seg_path,
-                seg_index=seg_idx,
-                total_segments=total,
-                project_dir=project_dir,
-                keyframes_dir=keyframes_dir,
-                target_language=target_language,
-                # 第一段已经转录过，直接复用
-                cached_transcribe=first_transcribe if seg_idx == 0 else None,
-            )
+            try:
+                seg_article = await self._process_segment(
+                    seg_path=seg_path,
+                    seg_index=seg_idx,
+                    total_segments=total,
+                    project_dir=project_dir,
+                    keyframes_dir=keyframes_dir,
+                    target_language=target_language,
+                    cached_transcribe=first_transcribe if seg_idx == 0 else None,
+                )
+            except Exception:
+                logger.exception("片段 %d/%d 处理失败", seg_idx + 1, total)
+                seg_article = None
 
             if seg_article:
-                all_segment_articles.append(seg_article)
+                all_segment_articles[seg_idx] = seg_article
+                # 标记完成并持久化状态
+                seg_statuses[seg_key] = "completed"
+                state["segments"] = seg_statuses
+                _save_state(project_dir, state)
+                logger.info(
+                    "[状态保存] 片段 %d/%d 已标记为 completed",
+                    seg_idx + 1, total,
+                )
+            else:
+                seg_statuses[seg_key] = "failed"
+                state["segments"] = seg_statuses
+                _save_state(project_dir, state)
+                logger.error(
+                    "片段 %d/%d 处理失败，状态已保存。可重新运行以从此片段继续。",
+                    seg_idx + 1, total,
+                )
+                raise RuntimeError(
+                    f"片段 {seg_idx + 1}/{total} 处理失败，已保存进度。"
+                    f"重新运行相同视频即可从失败片段继续。"
+                )
 
         # ============================================================
         # 合并所有片段的文章
         # ============================================================
-        if len(all_segment_articles) == 1:
-            final_article = all_segment_articles[0]
+        completed_articles = [a for a in all_segment_articles if a]
+
+        if len(completed_articles) == 1:
+            final_article = completed_articles[0]
         else:
-            final_article = "\n\n---\n\n".join(all_segment_articles)
+            final_article = "\n\n---\n\n".join(completed_articles)
 
         # 修正图片路径
         final_article = self._fix_image_paths(final_article, keyframes_dir)
@@ -198,8 +291,13 @@ class VTTPipeline:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(final_article)
 
+        # 全部完成，更新状态
+        state["status"] = "completed"
+        state["output_path"] = output_path
+        _save_state(project_dir, state)
+
         logger.info("=" * 60)
-        logger.info("处理完成! 共 %d 个片段，文章已保存至: %s", len(segments), output_path)
+        logger.info("处理完成! 共 %d 个片段，文章已保存至: %s", total, output_path)
         logger.info("=" * 60)
 
         return final_article, output_path
@@ -270,10 +368,10 @@ class VTTPipeline:
             logger.error("%s 转录失败: %s", seg_label, transcribe_text)
             return None
 
-        # 移动关键帧到项目目录
-        self._move_keyframes(tmp_kf_dir, keyframes_dir)
+        # 移动关键帧到项目目录（带分段前缀防止冲突）
+        rename_map = self._move_keyframes(tmp_kf_dir, keyframes_dir, seg_index)
         keyframe_text = self._rewrite_keyframe_paths(
-            keyframe_text, keyframes_dir,
+            keyframe_text, keyframes_dir, rename_map,
         )
 
         # 保存转录原文
@@ -400,23 +498,33 @@ class VTTPipeline:
         return Path(transcribe_text).stem if False else "untitled"
 
     @staticmethod
-    def _move_keyframes(src_dir: str, dst_dir: str) -> None:
-        """将关键帧从临时目录移动到项目目录。"""
+    def _move_keyframes(src_dir: str, dst_dir: str, seg_index: int = 0) -> dict[str, str]:
+        """将关键帧从临时目录移动到项目目录，加上分段前缀避免冲突。
+
+        Returns:
+            旧文件名 -> 新文件名 的映射表。
+        """
         import shutil
+        rename_map: dict[str, str] = {}
         if not os.path.isdir(src_dir):
-            return
+            return rename_map
+        prefix = f"part{seg_index:03d}_"
         for fname in os.listdir(src_dir):
             src_path = os.path.join(src_dir, fname)
-            dst_path = os.path.join(dst_dir, fname)
             if os.path.isfile(src_path):
+                new_fname = f"{prefix}{fname}"
+                dst_path = os.path.join(dst_dir, new_fname)
                 shutil.move(src_path, dst_path)
+                rename_map[fname] = new_fname
         # 清理临时目录
         shutil.rmtree(src_dir, ignore_errors=True)
+        return rename_map
 
     @staticmethod
     def _rewrite_keyframe_paths(
         keyframe_text: str,
         keyframes_dir: str,
+        rename_map: dict[str, str] | None = None,
     ) -> str:
         """将 keyframe JSON 中的 image_path 更新为新目录下的路径。"""
         try:
@@ -424,6 +532,8 @@ class VTTPipeline:
             for kf in data.get("keyframes", []):
                 old_path = kf.get("image_path", "")
                 fname = os.path.basename(old_path)
+                if rename_map and fname in rename_map:
+                    fname = rename_map[fname]
                 kf["image_path"] = os.path.join(keyframes_dir, fname)
             return json.dumps(data, ensure_ascii=False, indent=2)
         except (json.JSONDecodeError, TypeError):
