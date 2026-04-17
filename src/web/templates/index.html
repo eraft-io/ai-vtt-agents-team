@@ -72,10 +72,56 @@
 
     <!-- ============== Right: Chat Panel ============== -->
     <main class="chat-panel">
-      <!-- Input bar -->
-      <div class="chat-input-bar">
+      <!-- Mode toggle -->
+      <div class="mode-bar">
+        <button id="btn-mode-single" class="mode-btn active">单视频</button>
+        <button id="btn-mode-batch" class="mode-btn">批量并发</button>
+      </div>
+
+      <!-- Single mode input -->
+      <div id="input-single" class="chat-input-bar">
         <input type="text" id="input-prompt" class="input-prompt" placeholder="帮我把桌面上的 demo.mp4 翻译成中文文章">
         <button id="btn-start" class="btn btn-accent">发送</button>
+      </div>
+
+      <!-- Batch mode input -->
+      <div id="input-batch" class="chat-input-bar batch-bar" style="display:none;">
+        <div class="batch-input-group">
+          <div class="batch-dir-row">
+            <label class="batch-option-label" style="flex:1">视频目录（输入目录路径，自动扫描其中的视频文件）
+              <input type="text" id="input-batch-dir" class="input-prompt" placeholder="/Users/me/Desktop/videos 或 ~/Desktop/lectures">
+            </label>
+          </div>
+          <div class="batch-options">
+            <label class="batch-option-label">目标语言
+              <input type="text" id="batch-language" class="batch-option-input" value="中文" placeholder="中文">
+            </label>
+            <label class="batch-option-label">并发数
+              <input type="number" id="batch-concurrency" class="batch-option-input" value="3" min="1" max="10">
+            </label>
+            <button id="btn-batch-start" class="btn btn-accent">开始批量处理</button>
+          </div>
+        </div>
+
+        <!-- 批次历史 -->
+        <div id="batch-history" class="batch-history">
+          <div class="batch-history-header">
+            <h3>历史批次</h3>
+            <button id="btn-refresh-batches" class="btn btn-sm">刷新</button>
+          </div>
+          <div id="batch-history-list" class="batch-history-list"></div>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div id="progress-bar" class="progress-bar" style="display:none;">
+        <div class="progress-info">
+          <span id="progress-label">处理中...</span>
+          <span id="progress-count">0/0</span>
+        </div>
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+        </div>
       </div>
 
       <!-- Message stream -->

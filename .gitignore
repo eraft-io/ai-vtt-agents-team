@@ -31,6 +31,7 @@ output/keyframes/
 output/articles/
 output/segments/
 output/_tmp_keyframes*/
+output/
 
 # Whisper 模型缓存
 *.pt

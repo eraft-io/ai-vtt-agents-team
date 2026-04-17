@@ -19,7 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from src.pipelines.vtt_pipeline import VTTPipeline
+from src.pipelines.vtt_pipeline import VTTPipeline, scan_video_dir
+from src.pipelines.state_db import StateDB
 from src.main import parse_user_prompt
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,9 @@ ARTICLES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/articles", StaticFiles(directory=str(ARTICLES_DIR)), name="articles")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+# Global StateDB instance
+state_db = StateDB()
+
 
 # ---------------------------------------------------------------------------
 # WebSocket log handler – captures logger output and pushes to client
@@ -58,12 +62,20 @@ class WebSocketLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            msg = self.format(record)
-            payload = json.dumps({
-                "type": "log",
-                "level": record.levelname,
-                "message": msg,
-            })
+            # 检测结构化进度信息
+            progress = getattr(record, "progress", None)
+            if progress:
+                payload = json.dumps({
+                    "type": "progress",
+                    **progress,
+                })
+            else:
+                msg = self.format(record)
+                payload = json.dumps({
+                    "type": "log",
+                    "level": record.levelname,
+                    "message": msg,
+                })
             asyncio.run_coroutine_threadsafe(
                 self._ws.send_text(payload),
                 self._loop,
@@ -103,12 +115,8 @@ async def put_config(request: Request):
 
 @app.get("/api/download")
 async def download_md(path: str = Query(...)):
-    """Download a markdown file from output directory."""
+    """Download a markdown file."""
     file_path = Path(path).resolve()
-    output_root = Path.cwd() / "output"
-    # Security: only allow files under output/
-    if not str(file_path).startswith(str(output_root.resolve())):
-        return {"error": "Access denied"}
     if not file_path.is_file():
         return {"error": "File not found"}
     return FileResponse(
@@ -118,9 +126,66 @@ async def download_md(path: str = Query(...)):
     )
 
 
+@app.get("/api/file")
+async def serve_file(path: str = Query(...)):
+    """Serve an arbitrary file (images, etc.) by absolute path.
+
+    Used by the frontend to load keyframe images that are now stored
+    alongside videos instead of under output/articles/.
+    """
+    file_path = Path(path).resolve()
+    if not file_path.is_file():
+        return {"error": "File not found"}
+    # Guess media type
+    suffix = file_path.suffix.lower()
+    media_types = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".gif": "image/gif",
+        ".webp": "image/webp", ".svg": "image/svg+xml",
+        ".md": "text/markdown", ".json": "application/json",
+    }
+    media_type = media_types.get(suffix, "application/octet-stream")
+    return FileResponse(path=str(file_path), media_type=media_type)
+
+
+# ---------------------------------------------------------------------------
+# Batch status API (SQLite-backed)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/batches")
+async def list_batches(limit: int = 20):
+    """列出最近的批次任务。"""
+    return state_db.list_batches(limit=limit)
+
+
+@app.get("/api/batches/{batch_id}")
+async def get_batch_detail(batch_id: str):
+    """获取批次详情及其所有视频任务状态。"""
+    batch = state_db.get_batch(batch_id)
+    if not batch:
+        return {"error": "Batch not found"}
+    tasks = state_db.get_tasks(batch_id)
+    return {"batch": batch, "tasks": tasks}
+
+
+@app.post("/api/batches/{batch_id}/resume")
+async def resume_batch(batch_id: str):
+    """检查批次是否可恢复，返回待处理视频数。"""
+    batch = state_db.get_batch(batch_id)
+    if not batch:
+        return {"error": "Batch not found"}
+    pending = state_db.get_pending_paths(batch_id)
+    return {"batch_id": batch_id, "pending_count": len(pending), "pending": pending}
+
+
 @app.websocket("/ws/pipeline")
 async def ws_pipeline(ws: WebSocket):
-    """WebSocket endpoint that runs the VTT pipeline with real-time log streaming."""
+    """WebSocket endpoint that runs the VTT pipeline with real-time log streaming.
+
+    Supports both single and batch video processing:
+    - Single: {"video_path": "...", "target_language": "..."}
+    - Batch:  {"video_paths": ["...", "..."], "target_language": "...", "max_concurrency": 3}
+    """
     await ws.accept()
 
     try:
@@ -129,10 +194,33 @@ async def ws_pipeline(ws: WebSocket):
         payload = json.loads(raw)
 
         video_path = payload.get("video_path", "")
+        video_paths = payload.get("video_paths", [])
+        video_dir = payload.get("video_dir", "")
         target_language = payload.get("target_language", "")
         prompt = payload.get("prompt", "")
+        max_concurrency = int(payload.get("max_concurrency", 3))
+        resume_batch_id = payload.get("resume_batch_id", "")
 
-        if not video_path and not prompt:
+        # 如果传入了目录，自动扫描视频文件
+        if video_dir and not video_paths:
+            try:
+                video_paths = scan_video_dir(video_dir)
+            except ValueError as e:
+                await ws.send_text(json.dumps({
+                    "type": "error",
+                    "message": str(e),
+                }))
+                await ws.close()
+                return
+            if not video_paths:
+                await ws.send_text(json.dumps({
+                    "type": "error",
+                    "message": f"目录中未找到视频文件: {video_dir}",
+                }))
+                await ws.close()
+                return
+
+        if not video_path and not video_paths and not prompt:
             await ws.send_text(json.dumps({
                 "type": "error",
                 "message": "请输入指令或视频路径",
@@ -189,6 +277,49 @@ async def ws_pipeline(ws: WebSocket):
                 "message": "正在解析指令...",
             }))
 
+            # ----------------------------------------------------------
+            # Batch mode: multiple video files processed concurrently
+            # ----------------------------------------------------------
+            if video_paths and len(video_paths) > 1:
+                mode_label = "恢复" if resume_batch_id else "新建"
+                await ws.send_text(json.dumps({
+                    "type": "stage",
+                    "stage": "batch",
+                    "status": "started",
+                    "message": f"批量模式({mode_label}): {len(video_paths)} 个视频, 并发度 {max_concurrency}",
+                }))
+
+                results = await VTTPipeline.run_batch(
+                    video_paths=video_paths,
+                    target_language=target_language or "中文",
+                    max_concurrency=max_concurrency,
+                    model_name=model_name,
+                    api_key=api_key,
+                    whisper_model_size=whisper_model_size,
+                    scene_threshold=scene_threshold,
+                    min_interval_sec=min_interval_sec,
+                    video_dir=video_dir,
+                    state_db=state_db,
+                    batch_id=resume_batch_id or None,
+                )
+
+                await ws.send_text(json.dumps({
+                    "type": "batch_result",
+                    "results": [
+                        {
+                            "video_path": r["video_path"],
+                            "status": r["status"],
+                            "output_path": r.get("output_path"),
+                            "error": r.get("error"),
+                        }
+                        for r in results
+                    ],
+                }))
+                return
+
+            # ----------------------------------------------------------
+            # Single video mode (original logic)
+            # ----------------------------------------------------------
             # Parse prompt if no explicit video_path
             if not video_path and prompt:
                 parsed = await parse_user_prompt(prompt, api_key, model_name)
@@ -201,6 +332,10 @@ async def ws_pipeline(ws: WebSocket):
                     "status": "done",
                     "message": f"解析结果: 视频={video_path}, 语言={target_language}",
                 }))
+
+            # If video_paths has exactly 1 entry, use it
+            if not video_path and video_paths:
+                video_path = video_paths[0]
 
             if not video_path:
                 await ws.send_text(json.dumps({

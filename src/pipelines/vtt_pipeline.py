@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -27,8 +28,44 @@ from src.agents import (
 from src.tools.whisper_tool import transcribe_video
 from src.tools.video_tool import extract_keyframes
 from src.tools.video_splitter import preprocess_video
+from src.pipelines.state_db import StateDB
 
 logger = logging.getLogger(__name__)
+
+# 支持扫描的视频文件扩展名
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".ts"}
+
+
+def sanitize_filename(name: str) -> str:
+    """将视频文件名清洗为合法的输出文件名。
+
+    仅保留英文字母、数字和连字符，去除空格及无意义字符，
+    连续连字符合并，首尾连字符去除。
+    """
+    # 去掉扩展名（如果传入了）
+    stem = Path(name).stem if "." in name else name
+    # 只保留英文字母、数字、连字符
+    cleaned = re.sub(r"[^a-zA-Z0-9-]", "-", stem)
+    # 合并连续连字符
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    # 全部转小写
+    cleaned = cleaned.lower()
+    return cleaned or "untitled"
+
+
+def scan_video_dir(directory: str) -> list[str]:
+    """扫描目录下的所有视频文件（非递归），返回绝对路径列表。"""
+    directory = str(Path(directory).expanduser().resolve())
+    if not os.path.isdir(directory):
+        raise ValueError(f"目录不存在: {directory}")
+
+    videos: list[str] = []
+    for fname in sorted(os.listdir(directory)):
+        ext = Path(fname).suffix.lower()
+        if ext in VIDEO_EXTENSIONS:
+            videos.append(os.path.join(directory, fname))
+
+    return videos
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +184,14 @@ class VTTPipeline:
         logger.info("[预处理] 完成: 共 %d 个片段", len(segments))
 
         # ============================================================
-        # 第一个片段的转录结果用于提取主题名
+        # 用视频文件名作为输出目录名
         # ============================================================
-        first_segment_path = segments[0]["path"]
+        topic_slug = sanitize_filename(video_name)
+        logger.info("输出目录: %s", topic_slug)
 
-        logger.info("[主题提取] 转录第一个片段以提取主题名")
+        # 转录第一个片段（后续处理时复用，避免重复转录）
+        first_segment_path = segments[0]["path"]
+        logger.info("[转录] 转录第一个片段")
         first_resp = await transcribe_video(
             video_path=first_segment_path,
             model_size=self.whisper_model_size,
@@ -161,10 +201,9 @@ class VTTPipeline:
             if block.get("type") == "text"
         )
 
-        topic_slug = await self._extract_topic_slug(first_transcribe)
-        logger.info("视频主题: %s", topic_slug)
-
-        project_dir = os.path.join(self.output_dir, "articles", topic_slug)
+        # 输出到视频文件所在目录下的子目录
+        video_parent_dir = str(Path(video_path).parent)
+        project_dir = os.path.join(video_parent_dir, topic_slug)
         keyframes_dir = os.path.join(project_dir, "keyframes")
         os.makedirs(keyframes_dir, exist_ok=True)
 
@@ -201,6 +240,11 @@ class VTTPipeline:
         # ============================================================
         all_segment_articles: list[str | None] = [None] * total
 
+        # 提前确定输出路径，每完成一段即实时写入
+        clean_name = sanitize_filename(video_name)
+        output_filename = f"{clean_name}.md"
+        output_path = os.path.join(project_dir, output_filename)
+
         for seg in segments:
             seg_idx = seg["index"]
             seg_path = seg["path"]
@@ -233,6 +277,17 @@ class VTTPipeline:
             )
             logger.info("=" * 60)
 
+            # 发送结构化进度信息（Web 端可展示进度条）
+            logger.info(
+                "segment_progress",
+                extra={"progress": {
+                    "current": seg_idx + 1,
+                    "total": total,
+                    "video_name": video_name,
+                    "stage": "processing",
+                }},
+            )
+
             try:
                 seg_article = await self._process_segment(
                     seg_path=seg_path,
@@ -253,9 +308,23 @@ class VTTPipeline:
                 seg_statuses[seg_key] = "completed"
                 state["segments"] = seg_statuses
                 _save_state(project_dir, state)
+
+                # ---- 实时写入：将已完成的内容立即写入目标文件 ----
+                self._flush_to_file(
+                    all_segment_articles, output_path, keyframes_dir,
+                )
                 logger.info(
-                    "[状态保存] 片段 %d/%d 已标记为 completed",
-                    seg_idx + 1, total,
+                    "[实时写入] 片段 %d/%d 已写入: %s",
+                    seg_idx + 1, total, output_path,
+                )
+                logger.info(
+                    "segment_done",
+                    extra={"progress": {
+                        "current": seg_idx + 1,
+                        "total": total,
+                        "video_name": video_name,
+                        "stage": "done",
+                    }},
                 )
             else:
                 seg_statuses[seg_key] = "failed"
@@ -271,25 +340,10 @@ class VTTPipeline:
                 )
 
         # ============================================================
-        # 合并所有片段的文章
+        # 最终：读取已写入的完整文件内容作为返回值
         # ============================================================
-        completed_articles = [a for a in all_segment_articles if a]
-
-        if len(completed_articles) == 1:
-            final_article = completed_articles[0]
-        else:
-            final_article = "\n\n---\n\n".join(completed_articles)
-
-        # 修正图片路径
-        final_article = self._fix_image_paths(final_article, keyframes_dir)
-
-        # 保存最终文章
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"{video_name}_{target_language}_{timestamp}.md"
-        output_path = os.path.join(project_dir, output_filename)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(final_article)
+        with open(output_path, "r", encoding="utf-8") as f:
+            final_article = f.read()
 
         # 全部完成，更新状态
         state["status"] = "completed"
@@ -326,7 +380,8 @@ class VTTPipeline:
         logger.info("%s 阶段一: 转录 + 关键帧提取", seg_label)
 
         tmp_kf_dir = os.path.join(
-            self.output_dir, f"_tmp_keyframes_seg{seg_index}",
+            self.output_dir,
+            f"_tmp_keyframes_{hashlib.md5(video_name.encode()).hexdigest()[:6]}_seg{seg_index}",
         )
 
         if cached_transcribe is not None:
@@ -565,3 +620,214 @@ class VTTPipeline:
             return "error" in data
         except (json.JSONDecodeError, TypeError):
             return False
+
+    def _flush_to_file(
+        self,
+        all_segment_articles: list[str | None],
+        output_path: str,
+        keyframes_dir: str,
+    ) -> None:
+        """将当前已完成的所有片段合并写入目标文件（实时刷新）。
+
+        每次调用都会重写整个文件，保证片段顺序正确且内容完整。
+        """
+        completed = [a for a in all_segment_articles if a]
+        if not completed:
+            return
+
+        if len(completed) == 1:
+            merged = completed[0]
+        else:
+            merged = "\n\n---\n\n".join(completed)
+
+        merged = self._fix_image_paths(merged, keyframes_dir)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(merged)
+
+    # ------------------------------------------------------------------
+    # 批量并发处理多个视频
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def run_batch(
+        video_paths: list[str],
+        target_language: str = "中文",
+        max_concurrency: int = 3,
+        *,
+        model_name: str = "qwen3.6-plus",
+        api_key: str | None = None,
+        whisper_model_size: str = "medium",
+        scene_threshold: float = 0.08,
+        min_interval_sec: float = 5.0,
+        output_dir: str = "output",
+        max_duration_sec: float = 30 * 60,
+        segment_duration_sec: float = 10 * 60,
+        video_dir: str = "",
+        state_db: StateDB | None = None,
+        batch_id: str | None = None,
+    ) -> list[dict]:
+        """并发处理多个视频文件，通过 SQLite 追踪每个视频的处理状态。
+
+        为每个视频创建独立的 VTTPipeline 实例以隔离 Agent 状态，
+        通过信号量控制最大并发数。
+
+        Args:
+            video_paths: 视频文件路径列表。
+            target_language: 目标翻译语言。
+            max_concurrency: 最大并发处理数，默认 3。
+            model_name: DashScope 模型名称。
+            api_key: DashScope API Key。
+            whisper_model_size: Whisper 模型大小。
+            scene_threshold: 关键帧场景切换阈值。
+            min_interval_sec: 关键帧最小间隔。
+            output_dir: 输出目录。
+            max_duration_sec: 视频超过此时长则分段。
+            segment_duration_sec: 每段时长。
+            video_dir: 视频目录（用于断点续传查找）。
+            state_db: StateDB 实例（可选，不传则自动创建）。
+            batch_id: 已有批次ID（恢复模式）。
+
+        Returns:
+            处理结果列表，每项包含:
+            {"video_path": str, "status": "success"|"failed",
+             "article": str|None, "output_path": str|None, "error": str|None}
+        """
+        if state_db is None:
+            state_db = StateDB()
+
+        # 创建或复用批次
+        if batch_id is None:
+            batch_id = state_db.create_batch(
+                video_paths=video_paths,
+                target_language=target_language,
+                concurrency=max_concurrency,
+                video_dir=video_dir,
+            )
+            logger.info("创建新批次: %s", batch_id)
+        else:
+            # 恢复模式：只处理未完成的视频
+            pending = state_db.get_pending_paths(batch_id)
+            if pending:
+                video_paths = pending
+                state_db.update_batch_status(batch_id, "running")
+                logger.info(
+                    "恢复批次 %s: 跳过已完成, 剩余 %d 个视频",
+                    batch_id, len(pending),
+                )
+            else:
+                logger.info("批次 %s 所有视频已完成", batch_id)
+                return []
+
+        sem = asyncio.Semaphore(max_concurrency)
+        results: list[dict] = [None] * len(video_paths)  # type: ignore[list-item]
+
+        logger.info("=" * 60)
+        logger.info(
+            "批量处理: batch=%s, 共 %d 个视频, 最大并发 %d",
+            batch_id, len(video_paths), max_concurrency,
+        )
+        logger.info("=" * 60)
+
+        async def _process_one(index: int, vpath: str) -> dict:
+            async with sem:
+                video_name = Path(vpath).stem
+
+                # 查找该视频对应的 task 记录
+                task_row = state_db.get_task_by_path(batch_id, vpath)
+                task_id = task_row["task_id"] if task_row else None
+
+                # 跳过已完成
+                if task_row and task_row["status"] == "completed":
+                    logger.info(
+                        "[批量 %d/%d] 已完成，跳过: %s",
+                        index + 1, len(video_paths), video_name,
+                    )
+                    return {
+                        "video_path": vpath,
+                        "status": "success",
+                        "article": None,
+                        "output_path": task_row.get("output_path"),
+                        "error": None,
+                    }
+
+                # 标记为处理中
+                if task_id:
+                    state_db.update_task_status(task_id, "processing")
+
+                logger.info(
+                    "[批量 %d/%d] 开始处理: %s",
+                    index + 1, len(video_paths), video_name,
+                )
+                try:
+                    pipeline = VTTPipeline(
+                        model_name=model_name,
+                        api_key=api_key,
+                        whisper_model_size=whisper_model_size,
+                        scene_threshold=scene_threshold,
+                        min_interval_sec=min_interval_sec,
+                        output_dir=output_dir,
+                        max_duration_sec=max_duration_sec,
+                        segment_duration_sec=segment_duration_sec,
+                    )
+                    article, output_path = await pipeline.run(
+                        video_path=vpath,
+                        target_language=target_language,
+                    )
+
+                    # 标记完成
+                    if task_id:
+                        state_db.update_task_status(
+                            task_id, "completed", output_path=output_path,
+                        )
+
+                    logger.info(
+                        "[批量 %d/%d] 完成: %s -> %s",
+                        index + 1, len(video_paths), video_name, output_path,
+                    )
+                    return {
+                        "video_path": vpath,
+                        "status": "success",
+                        "article": article,
+                        "output_path": output_path,
+                        "error": None,
+                    }
+                except Exception as e:
+                    # 标记失败
+                    if task_id:
+                        state_db.update_task_status(
+                            task_id, "failed", error=str(e),
+                        )
+                    logger.exception(
+                        "[批量 %d/%d] 失败: %s",
+                        index + 1, len(video_paths), video_name,
+                    )
+                    return {
+                        "video_path": vpath,
+                        "status": "failed",
+                        "article": None,
+                        "output_path": None,
+                        "error": str(e),
+                    }
+
+        tasks = [
+            asyncio.create_task(_process_one(i, vp))
+            for i, vp in enumerate(video_paths)
+        ]
+
+        done_results = await asyncio.gather(*tasks)
+        for i, r in enumerate(done_results):
+            results[i] = r
+
+        # 更新批次最终状态
+        state_db.finish_batch(batch_id)
+
+        success = sum(1 for r in results if r["status"] == "success")
+        failed = sum(1 for r in results if r["status"] == "failed")
+        logger.info("=" * 60)
+        logger.info(
+            "批量处理完成 (batch=%s): 成功 %d, 失败 %d, 共 %d",
+            batch_id, success, failed, len(results),
+        )
+        logger.info("=" * 60)
+
+        return results
