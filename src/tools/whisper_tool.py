@@ -11,12 +11,18 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from agentscope.tool import ToolResponse
 from agentscope.message import TextBlock
 
 logger = logging.getLogger(__name__)
+
+# Whisper 转录失败最大重试次数
+_MAX_TRANSCRIBE_RETRIES = 3
+# 重试间隔（秒）
+_TRANSCRIBE_RETRY_INTERVAL = 3 * 60  # 3 分钟
 
 # 全局缓存已加载的 Whisper 模型，避免重复加载
 _whisper_model = None
@@ -79,28 +85,45 @@ def _do_transcribe(video_path: str, model_size: str) -> dict:
         except RuntimeError as e:
             return {"error": f"音频提取失败: {e}"}
 
-    # 2. 使用 Whisper 进行完整转录
-    try:
-        model = _load_whisper_model(model_size)
-        logger.info("正在使用 Whisper 转录音频（请等待完整转录）...")
-        result = model.transcribe(audio_path)
-    except Exception:
-        if model_size != "base":
+    # 2. 使用 Whisper 进行完整转录（支持失败重试）
+    result = None
+    last_error = None
+    for attempt in range(1, _MAX_TRANSCRIBE_RETRIES + 1):
+        try:
+            model = _load_whisper_model(model_size)
+            logger.info("正在使用 Whisper 转录音频（请等待完整转录）...")
+            result = model.transcribe(audio_path)
+            break
+        except Exception as e:
+            last_error = e
             logger.warning(
-                "Whisper %s 模型转录失败，降级使用 base 模型重试...",
-                model_size,
+                "Whisper 转录失败 (第 %d/%d 次尝试): %s",
+                attempt, _MAX_TRANSCRIBE_RETRIES, e,
             )
-            try:
-                model = _load_whisper_model("base")
-                result = model.transcribe(audio_path)
-            except Exception as e:
-                return {"error": f"Whisper 转录失败: {e}"}
-        else:
-            return {"error": "Whisper 转录失败"}
-    finally:
-        # 保留音频文件供检查，不删除
-        if audio_path and os.path.exists(audio_path):
-            logger.info("中间音频文件已保留: %s", audio_path)
+            # 非 base 模型：第一次尝试时先尝试降级到 base
+            if attempt == 1 and model_size != "base":
+                logger.info("降级使用 base 模型重试...")
+                try:
+                    model = _load_whisper_model("base")
+                    result = model.transcribe(audio_path)
+                    break
+                except Exception as e2:
+                    last_error = e2
+                    logger.warning("base 模型也失败: %s", e2)
+            # 若还有重试机会，等待后重试
+            if attempt < _MAX_TRANSCRIBE_RETRIES:
+                logger.info(
+                    "等待 %d 秒后重试转录...",
+                    _TRANSCRIBE_RETRY_INTERVAL,
+                )
+                time.sleep(_TRANSCRIBE_RETRY_INTERVAL)
+    else:
+        # 所有重试均失败
+        return {"error": f"Whisper 转录失败（重试 {_MAX_TRANSCRIBE_RETRIES} 次）: {last_error}"}
+
+    # 保留音频文件供检查
+    if audio_path and os.path.exists(audio_path):
+        logger.info("中间音频文件已保留: %s", audio_path)
 
     # 3. 格式化输出
     segments = []
