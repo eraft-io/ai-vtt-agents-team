@@ -381,7 +381,7 @@ function showBatchResult(results) {
     let action = "";
     if (r.status === "success" && r.output_path) {
       const dlUrl = `/api/download?path=${encodeURIComponent(r.output_path)}`;
-      action = `<a href="${dlUrl}" class="btn btn-sm" download>下载 .md</a>`;
+      action = `<a href="${dlUrl}" class="btn btn-sm" download>下载 .docx</a>`;
     } else if (r.error) {
       action = `<span class="batch-error-text">${r.error}</span>`;
     }

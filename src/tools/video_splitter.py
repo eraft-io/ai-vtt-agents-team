@@ -30,6 +30,13 @@ def get_video_duration(video_path: str) -> float:
     Raises:
         RuntimeError: 无法获取视频时长。
     """
+    # 先检查文件是否存在
+    if not os.path.isfile(video_path):
+        raise FileNotFoundError(
+            f"视频文件不存在: {video_path}\n"
+            f"请确认文件路径是否正确。"
+        )
+
     try:
         result = subprocess.run(
             [

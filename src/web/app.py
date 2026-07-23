@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
-CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "agent_config.json"
+CONFIG_PATH = Path(__file__).resolve().parent / "config" / "agent_config.json"
+# 优先使用 CWD 下的配置（开发模式）
+_cwd_config = Path.cwd() / "config" / "agent_config.json"
+if _cwd_config.is_file():
+    CONFIG_PATH = _cwd_config
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -40,7 +44,8 @@ app = FastAPI(title="AI VTT Agents Team")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Serve output/articles so that markdown image paths (e.g. keyframes/xxx.jpg) resolve
-ARTICLES_DIR = Path(__file__).resolve().parents[2] / "output" / "articles"
+# 保留旧兼容，实际图片已通过 /api/file 服务
+ARTICLES_DIR = Path.cwd() / "output" / "articles"
 ARTICLES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/articles", StaticFiles(directory=str(ARTICLES_DIR)), name="articles")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -114,15 +119,22 @@ async def put_config(request: Request):
     return {"status": "ok"}
 
 @app.get("/api/download")
-async def download_md(path: str = Query(...)):
-    """Download a markdown file."""
+async def download_file(path: str = Query(...)):
+    """Download an output file (docx / markdown)."""
     file_path = Path(path).resolve()
     if not file_path.is_file():
         return {"error": "File not found"}
+    # 根据扩展名自动选择 media_type
+    suffix = file_path.suffix.lower()
+    media_map = {
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".md": "text/markdown",
+    }
+    media_type = media_map.get(suffix, "application/octet-stream")
     return FileResponse(
         path=str(file_path),
         filename=file_path.name,
-        media_type="text/markdown",
+        media_type=media_type,
     )
 
 
@@ -143,6 +155,7 @@ async def serve_file(path: str = Query(...)):
         ".png": "image/png", ".gif": "image/gif",
         ".webp": "image/webp", ".svg": "image/svg+xml",
         ".md": "text/markdown", ".json": "application/json",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
     media_type = media_types.get(suffix, "application/octet-stream")
     return FileResponse(path=str(file_path), media_type=media_type)

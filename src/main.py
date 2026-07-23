@@ -113,9 +113,36 @@ async def parse_user_prompt(
     }
 
 
-def load_config(config_path: str = "config/agent_config.json") -> dict:
-    """加载配置文件。"""
-    if not os.path.isfile(config_path):
+def _find_config_path() -> str:
+    """按优先级查找配置文件路径。
+
+    优先级:
+      1. 当前工作目录下的 config/agent_config.json
+      2. 包内默认的 src/config/agent_config.json
+    """
+    # 1. CWD (开发模式 / 用户在项目目录下运行)
+    cwd_config = os.path.join(os.getcwd(), "config", "agent_config.json")
+    if os.path.isfile(cwd_config):
+        return cwd_config
+
+    # 2. 包内默认配置 (pip install 后)
+    pkg_config = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config", "agent_config.json",
+    )
+    if os.path.isfile(pkg_config):
+        return pkg_config
+
+    return ""
+
+
+def load_config(config_path: str | None = None) -> dict:
+    """加载配置文件。
+
+    如果未指定 config_path，按优先级自动查找。
+    """
+    if config_path is None:
+        config_path = _find_config_path()
+    if not config_path or not os.path.isfile(config_path):
         return {}
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -227,10 +254,14 @@ async def main_async(
         min_interval_sec=min_interval_sec,
     )
 
-    result, output_path = await pipeline.run(
-        video_path=video_path,
-        target_language=target_language,
-    )
+    try:
+        result, output_path = await pipeline.run(
+            video_path=video_path,
+            target_language=target_language,
+        )
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
     print("\n" + "=" * 60)
     print(f"最终文章 (已保存至 {output_path}):")

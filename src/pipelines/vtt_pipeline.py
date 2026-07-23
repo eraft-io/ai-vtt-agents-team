@@ -28,6 +28,7 @@ from src.agents import (
 from src.tools.whisper_tool import transcribe_video
 from src.tools.video_tool import extract_keyframes
 from src.tools.video_splitter import preprocess_video
+from src.tools.md_to_docx import markdown_to_docx
 from src.pipelines.state_db import StateDB
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,13 @@ class VTTPipeline:
         """
         video_path = str(Path(video_path).expanduser().resolve())
         video_name = Path(video_path).stem
+
+        # 检查视频文件是否存在
+        if not os.path.isfile(video_path):
+            raise FileNotFoundError(
+                f"\u89c6\u9891\u6587\u4ef6\u4e0d\u5b58\u5728: {video_path}\n"
+                f"\u8bf7\u786e\u8ba4\u6587\u4ef6\u8def\u5f84\u662f\u5426\u6b63\u786e\u3002"
+            )
 
         logger.info("=" * 60)
         logger.info("开始处理视频: %s", video_path)
@@ -345,16 +353,23 @@ class VTTPipeline:
         with open(output_path, "r", encoding="utf-8") as f:
             final_article = f.read()
 
+        # 将 output_path 切换为 .docx（导出格式）
+        docx_path = output_path.rsplit(".", 1)[0] + ".docx"
+        if os.path.isfile(docx_path):
+            export_path = docx_path
+        else:
+            export_path = output_path
+
         # 全部完成，更新状态
         state["status"] = "completed"
-        state["output_path"] = output_path
+        state["output_path"] = export_path
         _save_state(project_dir, state)
 
         logger.info("=" * 60)
-        logger.info("处理完成! 共 %d 个片段，文章已保存至: %s", total, output_path)
+        logger.info("处理完成! 共 %d 个片段，文章已保存至: %s", total, export_path)
         logger.info("=" * 60)
 
-        return final_article, output_path
+        return final_article, export_path
 
     async def _process_segment(
         self,
@@ -629,7 +644,7 @@ class VTTPipeline:
     ) -> None:
         """将当前已完成的所有片段合并写入目标文件（实时刷新）。
 
-        每次调用都会重写整个文件，保证片段顺序正确且内容完整。
+        每次调用都会重写 .md 文件，并同时生成同名的 .docx 文件。
         """
         completed = [a for a in all_segment_articles if a]
         if not completed:
@@ -642,8 +657,17 @@ class VTTPipeline:
 
         merged = self._fix_image_paths(merged, keyframes_dir)
 
+        # 写入 .md 文件
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(merged)
+
+        # 同时生成 .docx 文件
+        docx_path = output_path.rsplit(".", 1)[0] + ".docx"
+        project_dir = os.path.dirname(output_path)
+        try:
+            markdown_to_docx(merged, docx_path, project_dir=project_dir)
+        except Exception:
+            logger.warning("生成 DOCX 文件失败，跳过", exc_info=True)
 
     # ------------------------------------------------------------------
     # 批量并发处理多个视频

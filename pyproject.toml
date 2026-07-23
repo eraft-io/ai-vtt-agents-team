@@ -2,8 +2,22 @@
 name = "ai-vtt-agents-team"
 version = "0.1.0"
 description = "基于 agentscope 框架的多 Agent 视频转录翻译系统"
-readme = "design_spec.md"
-requires-python = ">=3.13"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["video", "transcription", "translation", "agents", "whisper", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "agentscope>=1.0.0",
     "dashscope>=1.20.0",
@@ -14,7 +28,14 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "jinja2>=3.1.0",
+    "python-docx>=1.1.0",
+    "markdown>=3.5.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/your-org/ai-vtt-agents-team"
+Repository = "https://github.com/your-org/ai-vtt-agents-team"
+Issues = "https://github.com/your-org/ai-vtt-agents-team/issues"
 
 [project.scripts]
 vtt = "src.main:main"
@@ -22,6 +43,13 @@ vtt-web = "src.web.app:start"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+include = [
+    "src/**/*.py",
+    "src/**/*.json",
+    "src/**/*.html",
+    "src/**/*.js",
+    "src/**/*.css",
+]
 
 [build-system]
 requires = ["hatchling"]
